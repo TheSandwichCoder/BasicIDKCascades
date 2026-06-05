@@ -138,7 +138,10 @@ class IDKCascade:
         for cc_i, cc in enumerate(self.classifiers):
             pred = cc.predict(x)
 
-            if pred != -1 or cc_i == self.n_classifiers - 1:
+            # print(cc_i)
+
+            if not torch.equal(pred.squeeze(), torch.tensor([-1]).squeeze().to(device)) or cc_i == self.n_classifiers - 1:
+                # print("returned")
                 return pred
             
     def get_expected_duration(self):
@@ -151,7 +154,6 @@ def bench_classifier(cc, data_loader):
     total = 0
     time_taken = 0
 
-    counter = 0
     with torch.no_grad():
         for batch_features, batch_label in tqdm(data_loader):
             st = time.perf_counter()
@@ -162,12 +164,9 @@ def bench_classifier(cc, data_loader):
 
             total_guessed += sum(pred.flatten() != -1)
             
-            print(pred.flatten(), batch_label.flatten())
+            # print(pred.flatten(), batch_label.flatten())
             total += len(pred)
             time_taken += et - st
-            if counter > 100:
-                break
-            counter += 1
 
     acc = correct / total
     prec = correct / total_guessed
@@ -177,3 +176,5 @@ def bench_classifier(cc, data_loader):
     print(f"acc:{acc} prec:{prec} prob:{prob} avg time:{avg_time*1000:.1f}ms")
 
     return acc, prec, prob, avg_time
+
+
