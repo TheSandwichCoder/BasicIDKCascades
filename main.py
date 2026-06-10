@@ -17,8 +17,8 @@ ImageNetV2Transforms = preprocess = transforms.Compose([
     )
 ])
 dataset = ImageNetV2Dataset(location="data", transform=ImageNetV2Transforms)
-classifier_loader = DataLoader(dataset, batch_size=16, num_workers=4)
-cascade_loader = DataLoader(dataset, batch_size=1, num_workers=4)
+classifier_loader = DataLoader(dataset, batch_size=16, num_workers=0)
+cascade_loader = DataLoader(dataset, batch_size=1, num_workers=0)
 
 def get_confidence_thresholds():
 
@@ -55,17 +55,41 @@ def benchmark():
 
     cc3 = CascadeClassifier(get_resnet_152(), M3_P95_CONF_THRESHOLD, deterministic=True)
 
-    cascade = IDKCascade([cc1, cc2, cc3])
+    cascade_norm = IDKCascade([cc1, cc2, cc3])
+    cascade_threshold = IDKCascade([cc1, cc2, cc3], skip_type="threshold")
+    cascade_rf = IDKCascade([cc1, cc2, cc3], skip_type="rf")
 
-    bench_classifier(cc1, cascade_loader)
-    bench_classifier(cc2, cascade_loader)
-    bench_classifier(cascade, cascade_loader)
-    bench_classifier(cc3, cascade_loader)
+    bench_classifier(cascade_rf, cascade_loader)
+    bench_classifier(cascade_threshold, cascade_loader)
+    bench_classifier(cascade_norm, cascade_loader)
+
+    # bench_classifier(cc1, cascade_loader)
+    # bench_classifier(cc2, cascade_loader)
+    # bench_classifier(cc3, cascade_loader)
 
 
+def get_datas():
+    m1 = get_resnet_18()
+    cc1 = CascadeClassifier(m1, M1_P95_CONF_THRESHOLD)
+
+    m2 = get_resnet_34()
+    cc2 = CascadeClassifier(m2, M2_P95_CONF_THRESHOLD)
+
+    m3 = get_resnet_152()
+    cc3 = CascadeClassifier(m3, M3_P95_CONF_THRESHOLD, deterministic=True)
+
+    data1 = get_data(cc1, cascade_loader)
+    data2 = get_data(cc2, cascade_loader)
+    data3 = get_data(cc3, cascade_loader)
+
+    np.save('m1_output.npy', data1)
+    np.save('m2_output.npy', data2)
+    np.save('m3_output.npy', data3)
 # m3 = get_resnet_152()
 # cc3 = CascadeClassifier(m3, M3_P95_CONF_THRESHOLD)
 # bench_classifier(cc3, loader)
 
 # get_confidence_thresholds()
 benchmark()
+
+# get_data()

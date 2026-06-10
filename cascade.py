@@ -1,4 +1,4 @@
-
+import joblib
 import torch
 import torchvision
 from globals import device
@@ -15,6 +15,29 @@ class CascadeClassifier:
         # TODO
         self.probability = 0.0
         self.exec_time = 0.0
+
+    def run(self, x):
+        with torch.no_grad():
+            return self.model(x)
+        
+    def predict_for_rf(self, x):
+        with torch.no_grad():
+            output = self.model(x)
+
+            probabilities = torch.nn.functional.softmax(output, dim=1)
+
+            prob_np = probabilities.numpy()
+
+            top_prob, top_cat_id = torch.topk(probabilities, 2, dim=1)
+            top_prob, top_cat_id = top_prob.squeeze(), top_cat_id.squeeze()
+
+            eps = 1e-12    
+
+            conf = top_prob[0]
+            entropy = -np.sum(prob_np * np.log2(prob_np + eps))
+            margin = top_prob[0] - top_prob[1]
+
+            return torch.Tensor([top_cat_id[0]]), conf, entropy, margin
     
     def predict_raw(self, x):
         with torch.no_grad():
@@ -62,19 +85,6 @@ def get_model_conf_threshold(cc, precision, validation_loader, eps = 0.0001):
     all_predictions = np.array(all_predictions).flatten()
     all_confidences = np.array(all_confidences).flatten()
     all_labels = np.array(all_labels)
-
-    # precisions, recalls, thresholds = precision_recall_curve(all_labels, y_scores)
-
-    # # Define your target precision (e.g., 90%)
-    # target_precision = 0.90
-
-    # # Find all thresholds that meet or exceed the target precision
-    # valid_indices = np.where(precisions >= target_precision)[0]
-
-    # # Get the lowest threshold that hits the target (to maximize recall)
-    # best_threshold = thresholds[valid_indices[0]]
-
-
 
     low = 0
     high = 1
@@ -128,25 +138,58 @@ def get_resnet_152():
 
 # no optimization. Run classifiers in order
 class IDKCascade:
-    def __init__(self, classifiers, dependent = True):
+    def __init__(self, classifiers, dependent = True, skip_type = "none"):
         self.n_classifiers = len(classifiers)
         self.classifiers = classifiers
         self.is_dependent = dependent
+        self.skip_type = skip_type
+
+        self.rf_skipper = joblib.load("saved_models/random_forest.pkl")['model']
+
 
     # last classifier assumsed as deterministic
     def predict(self, x):
-        for cc_i, cc in enumerate(self.classifiers):
-            pred = cc.predict(x)
+        cc_i = 0
 
-            # print(cc_i)
+        while cc_i < self.n_classifiers:
+            cc = self.classifiers[cc_i]
+            pred, conf, entropy, margin = cc.predict_for_rf(x)
+
+
+            if not cc.deterministic and conf < cc.confidence_threshold:
+                pred = torch.Tensor([-1])
 
             if not torch.equal(pred.squeeze(), torch.tensor([-1]).squeeze().to(device)) or cc_i == self.n_classifiers - 1:
                 # print("returned")
                 return pred
+
+            if cc_i == 0:
+                if self.skip_type == "threshold":
+                    if conf < 0.3:
+                        cc_i += 1
+
+                elif self.skip_type == "rf":
+                    data = np.expand_dims(np.array([conf, entropy, margin]), axis = 0)
+
+                    can_skip = self.rf_skipper.predict(data)
+
+                    if can_skip[0]:
+                        cc_i += 1
+            
+            cc_i += 1
             
     def get_expected_duration(self):
         pass
 
+def get_data(cc, data_loader):
+    arr = []
+
+    with torch.no_grad():
+        for batch_features, batch_label in tqdm(data_loader):
+            o = cc.run(batch_features.to(device))
+            arr.append(o.numpy())
+
+    return np.array(arr)
             
 def bench_classifier(cc, data_loader):
     correct = 0
