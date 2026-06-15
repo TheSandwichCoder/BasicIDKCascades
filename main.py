@@ -45,27 +45,17 @@ def benchmark():
     m2 = get_resnet_34()
     cc2 = CascadeClassifier(m2, M2_P95_CONF_THRESHOLD)
 
-    # for i in range(5,10):
-    #     conf_threshold = i * 0.1
-    #     print(conf_threshold)
-
-    #     m3 = get_resnet_152()
-    #     cc3 = CascadeClassifier(m3, conf_threshold)
-    #     bench_classifier(cc3, classifier_loader)
-
     cc3 = CascadeClassifier(get_resnet_152(), M3_P95_CONF_THRESHOLD, deterministic=True)
 
     cascade_norm = IDKCascade([cc1, cc2, cc3])
-    cascade_threshold = IDKCascade([cc1, cc2, cc3], skip_type="threshold")
-    cascade_rf = IDKCascade([cc1, cc2, cc3], skip_type="rf")
+    cascade_threshold = IDKCascadeThresholdSkip([cc1, cc2, cc3])
+    cascade_rf = IDKCascadeRFSkip([cc1, cc2, cc3])
+    cascade_mlp = IDKCascadeMLPSkip([cc1, cc2, cc3])
 
     bench_classifier(cascade_rf, cascade_loader)
+    bench_classifier(cascade_mlp, cascade_loader)
     bench_classifier(cascade_threshold, cascade_loader)
     bench_classifier(cascade_norm, cascade_loader)
-
-    # bench_classifier(cc1, cascade_loader)
-    # bench_classifier(cc2, cascade_loader)
-    # bench_classifier(cc3, cascade_loader)
 
 
 def get_datas():
@@ -85,6 +75,15 @@ def get_datas():
     np.save('m1_output.npy', data1)
     np.save('m2_output.npy', data2)
     np.save('m3_output.npy', data3)
+
+def get_datas2():
+    m1 = get_resnet_18()
+
+    data1 = get_data2(m1, cascade_loader)
+
+    np.save('m1_features.npy', data1)
+
+
 # m3 = get_resnet_152()
 # cc3 = CascadeClassifier(m3, M3_P95_CONF_THRESHOLD)
 # bench_classifier(cc3, loader)

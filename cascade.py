@@ -4,6 +4,7 @@ import torchvision
 from globals import device
 from tqdm import tqdm
 import numpy as np
+from train_mlp import MLP
 import time
 
 class CascadeClassifier:
@@ -15,11 +16,25 @@ class CascadeClassifier:
         # TODO
         self.probability = 0.0
         self.exec_time = 0.0
+        self.feature_extractor = torch.nn.Sequential(*list(model.children())[:-1])
 
     def run(self, x):
         with torch.no_grad():
             return self.model(x)
-        
+
+    def predict_for_mlp(self, x):
+        with torch.no_grad():
+            o = self.feature_extractor(x)
+            features = torch.flatten(o, 1)
+
+            logits = self.model.fc(features)
+
+            probabilities = torch.nn.functional.softmax(logits, dim=1)
+
+            top_prob, top_cat_id = torch.topk(probabilities, 1, dim=1)
+
+            return features, top_prob, torch.Tensor([top_cat_id[0]])
+
     def predict_for_rf(self, x):
         with torch.no_grad():
             output = self.model(x)
@@ -37,7 +52,7 @@ class CascadeClassifier:
             entropy = -np.sum(prob_np * np.log2(prob_np + eps))
             margin = top_prob[0] - top_prob[1]
 
-            return torch.Tensor([top_cat_id[0]]), conf, entropy, margin
+            return torch.Tensor([top_cat_id[0]]), conf.item(), entropy.item(), margin.item()
     
     def predict_raw(self, x):
         with torch.no_grad():
@@ -138,11 +153,10 @@ def get_resnet_152():
 
 # no optimization. Run classifiers in order
 class IDKCascade:
-    def __init__(self, classifiers, dependent = True, skip_type = "none"):
+    def __init__(self, classifiers, dependent = True):
         self.n_classifiers = len(classifiers)
         self.classifiers = classifiers
         self.is_dependent = dependent
-        self.skip_type = skip_type
 
         self.rf_skipper = joblib.load("saved_models/random_forest.pkl")['model']
 
@@ -154,7 +168,6 @@ class IDKCascade:
         while cc_i < self.n_classifiers:
             cc = self.classifiers[cc_i]
             pred, conf, entropy, margin = cc.predict_for_rf(x)
-
 
             if not cc.deterministic and conf < cc.confidence_threshold:
                 pred = torch.Tensor([-1])
@@ -178,8 +191,88 @@ class IDKCascade:
             
             cc_i += 1
             
-    def get_expected_duration(self):
-        pass
+
+class IDKCascadeThresholdSkip(IDKCascade):
+    def __init__(self, classifiers, dependent = True):
+        super().__init__(classifiers, dependent)
+
+    def predict(self, x):
+        cc_i = 0
+
+        while cc_i < self.n_classifiers:
+            cc = self.classifiers[cc_i]
+
+            conf, pred = cc.predict_raw(x)
+
+            if not cc.deterministic and conf < cc.confidence_threshold:
+                pred = torch.Tensor([-1])
+
+            if pred.item() != -1 or cc_i == self.n_classifiers - 1:
+                return pred
+
+            if cc_i == 0 and conf < 0.3:
+                cc_i += 1
+            
+            cc_i += 1
+
+class IDKCascadeRFSkip(IDKCascade):
+    def __init__(self, classifiers, dependent = True):
+        super().__init__(classifiers, dependent)
+        self.rf_skipper = joblib.load("saved_models/random_forest.pkl")['model']
+
+    def predict(self, x):
+        cc_i = 0
+
+        while cc_i < self.n_classifiers:
+            cc = self.classifiers[cc_i]
+
+            pred, conf, entropy, margin = cc.predict_for_rf(x)
+
+            if not cc.deterministic and conf < cc.confidence_threshold:
+                pred = torch.Tensor([-1])
+
+            if pred.item() != -1 or cc_i == self.n_classifiers - 1:
+                return pred
+
+            if cc_i == 0:
+                data = np.expand_dims(np.array([conf, entropy, margin]), axis = 0)
+
+                can_skip = self.rf_skipper.predict(data)
+
+                if can_skip[0]:
+                    cc_i += 1
+            
+            cc_i += 1
+
+class IDKCascadeMLPSkip(IDKCascade):
+    def __init__(self, classifiers, dependent = True):
+        super().__init__(classifiers, dependent)
+        state_dict = torch.load("saved_models/mlp.pth", weights_only=True)
+        self.mlp_skipper = MLP()
+
+        self.mlp_skipper.load_state_dict(state_dict)
+
+    def predict(self, x):
+        cc_i = 0
+
+        while cc_i < self.n_classifiers:
+            cc = self.classifiers[cc_i]
+
+            features, conf, pred = cc.predict_for_mlp(x)
+
+            if not cc.deterministic and conf < cc.confidence_threshold:
+                pred = torch.Tensor([-1])
+
+            if pred.item() != -1 or cc_i == self.n_classifiers - 1:
+                return pred
+
+            if cc_i == 0:
+                o = self.mlp_skipper(features)
+
+                if o[0, 1] > o[0, 0]:
+                    cc_i += 1
+            
+            cc_i += 1
 
 def get_data(cc, data_loader):
     arr = []
@@ -187,6 +280,21 @@ def get_data(cc, data_loader):
     with torch.no_grad():
         for batch_features, batch_label in tqdm(data_loader):
             o = cc.run(batch_features.to(device))
+            arr.append(o.numpy())
+
+    return np.array(arr)
+
+
+
+def get_data2(m, data_loader):
+    arr = []
+
+    feature_extractor = torch.nn.Sequential(*list(m.children())[:-1])
+
+    with torch.no_grad():
+        for batch_features, batch_label in tqdm(data_loader):
+            o = feature_extractor(batch_features)
+            o = o.flatten()
             arr.append(o.numpy())
 
     return np.array(arr)
